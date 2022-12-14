@@ -1,0 +1,41 @@
+﻿@using Models;
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+     <div class="modal-body">
+                            <label> Tranche Amount</label> 
+                            <input class="form-control" type="text"
+                                
+                                   placeholder="0.00"
+                                   @bind="AdditionalTrancheAmount" />
+                       <input class="mt-5">
+                               <MudDatePicker Label="Drawdown Date" @bind-Date="TrancheDate" DisableToolbar="true"  />
+
+                    </div>
+
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" OnClick="() => SubmitClicked(AdditionalTrancheAmount, TrancheDate)">Ok</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; }
+
+    [Parameter] public string AdditionalTrancheAmount {get;set;}
+
+    int NewAdditionalTrancheAmount;
+    DateTime? TrancheDate = DateTime.Today;
+    NewTrancheData NewTrancheData = new  NewTrancheData();
+
+
+    void SubmitClicked(string newAdditionalTrancheAmount, DateTime? trancheDate)
+    {
+        NewTrancheData.AdditionalTrancheAmount = newAdditionalTrancheAmount;
+        NewTrancheData.TrancheDate = trancheDate;
+        MudDialog.Close(DialogResult.Ok<NewTrancheData>(NewTrancheData));
+    }
+            void Cancel() => MudDialog.Cancel();
+        }

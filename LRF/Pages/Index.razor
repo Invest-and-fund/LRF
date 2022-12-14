@@ -1,0 +1,975 @@
+﻿@page "/"
+
+@using DataAccessLibrary
+@using DataAccessLibrary.Models
+@using System.Text.Json
+@using System.Globalization
+@using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage;
+@using MudBlazor
+@using Models;
+
+@inject ISystemUserData _db
+@inject ILoanData _dbGetLoans
+@inject NavigationManager UriHelper
+@inject ProtectedSessionStorage Storage
+@inject IDialogService DialogService
+
+<div class="container-fluid mt-5 ml-0">
+    <div class="container-fluid">
+        <div>
+            <h6 class="py-3 pl-5 m-0 p-0 grey-background">Loan Parents</h6>
+            <MudPaper MaxWidth="100vw" MaxHeight="35vh" Class="overflow-y-auto py-3" Elevation="0">
+                <MudTreeView @bind-SelectedValue="SelectedValue" Dense="true" CanHover="true">
+                    @foreach (var loanParent in liveLoanParents)
+                    {
+                        <MudTreeViewItem Value="loanParent.Business_Name" @onclick="@(() => GetLiveLoanParent_Click(@loanParent.LoanID))" />
+                    }
+                </MudTreeView>
+            </MudPaper>
+        </div>
+      @*  <div class="my-3">
+            <MudDatePicker Label="Only Calendar" @bind-Date="dateSelected" DisableToolbar="true" @onclick="@(() => GetLiveLoanParent_Click(@liveLoanParentID))" />
+        </div>*@
+
+        <div class="mt-5">
+            <MudTable Items="@liveLoanParent" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" LoadingProgressColor="Color.Info">
+                <HeaderContent>
+                    <MudTh>Initial Drawdown Date</MudTh>
+                    <MudTh>Maturity Date</MudTh>
+                    <MudTh>Facility Amount</MudTh>
+                    <MudTh>Borrower Rate</MudTh>
+                    <MudTh>Lender Rate</MudTh>
+                    <MudTh>Term</MudTh>
+                    <MudTh>Loan Type</MudTh>
+                    <MudTh>Outstanding Balance</MudTh>
+                    <MudTh>Accruing Interest at Maturity</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Initial Drawdown Date">@context.DD_Date.Date</MudTd>
+                    <MudTd DataLabel="Maturity Date">@context.MaturityDate.Date</MudTd>
+                    <MudTd DataLabel="Facility Amount">@PenceToCurrencyStringPounds(context.Facility_Amount)</MudTd>
+                    <MudTd DataLabel="Borrower Rate">@GetRateOfInterestAsString(context.BorrowerRate)</MudTd>
+                    <MudTd DataLabel="Lender Rate">@GetRateOfInterestAsString(context.Fixed_rate)</MudTd>
+                    <MudTd DataLabel="Term">@context.Term</MudTd>
+                    <MudTd DataLabel="Loan Type">@context.LoanType</MudTd>
+                    <MudTd DataLabel="Outstanding Balance">@PenceToCurrencyStringPounds(iTrancheCapital)</MudTd>
+                    <MudTd DataLabel="Accruing Interest at Maturity">@PenceToCurrencyStringPounds(iTrancheInterest)</MudTd>
+
+                </RowTemplate>
+            </MudTable>
+        </div>
+        <div class="mt-5">
+            <MudTable Items="@TrancheInformationList" Hover="true" Breakpoint="Breakpoint.Sm" Loading="@_loading" LoadingProgressColor="Color.Info">
+                <HeaderContent>
+                    <MudTh>Tranche ID</MudTh>
+                    <MudTh>Tranche Name</MudTh>
+                    <MudTh>Drawdown Date</MudTh>
+                    <MudTh>Tranche Amount</MudTh>
+                    <MudTh>LH Amount</MudTh>
+                    <MudTh>Accruing Interest</MudTh>
+  
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Initial Drawdown Date">@context.trancheid</MudTd>@*Tranche ID*@
+                    <MudTd DataLabel="Initial Drawdown Date">@context.tranchename</MudTd>@*Tranche Name*@
+                    <MudTd DataLabel="Initial Drawdown Date">@context.tranchedddate</MudTd>@*Drawdown Date*@
+                    <MudTd DataLabel="Initial Drawdown Date">@context.trancheamount</MudTd>@*Tranche Amount*@
+                    <MudTd DataLabel="Initial Drawdown Date">@context.tranchelhamount</MudTd>@*LH Amount*@
+                    <MudTd DataLabel="Initial Drawdown Date">@context.trancheaccountinterest</MudTd>@*Accruing Interest*@
+
+                </RowTemplate>
+            </MudTable>
+        </div>
+    </div>
+</div>
+
+@*<MudButton @onclick="OpenDialog" Variant="Variant.Filled" Color="Color.Primary">
+    Open Dialog
+</MudButton>*@
+
+        <div class="my-3">
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary" @onclick="@(() =>AddTrancheInformation_Click())">Add Additional Tranches</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary" @onclick="@(() =>ClearTrancheInformation_Click())">Clear Additional Tranches</MudButton>
+        </div>
+
+<!--This code block is where you will write the 'backend' code. This code is compiled and run in the browser and a SignalR connection is used to post 'postbacks'-->
+@code {
+    [Parameter] public int NewAdditionalTrancheAmount { get; set; }
+
+    //Define variables at the top of the code block so we can see they are in the entire scope of the component
+    public List<SystemUserModel> systemUsers = new List<SystemUserModel>();
+
+    public List<LoanModel> liveLoanParents = new List<LoanModel>();
+    public List<LoanModel> liveLoanParent = new List<LoanModel>();
+    public List<LoanModel> liveLoanParentRelatedLoanData = new List<LoanModel>();
+    //public List<LoanModel> ProvisionalLoanData = new List<LoanModel>();
+    public List<LoanModel> ProvisionalLoanDataList = new List<LoanModel>();
+    public List<LendersModel> GetAllLenders = new List<LendersModel>();
+    public List<LoanModel> GetTrancheSum = new List<LoanModel>();
+    public List<LoanModel> GetAllHELoans = new List<LoanModel>();
+    public List<LoanExtensionModel> GetExtensionDataSet = new List<LoanExtensionModel>();
+
+    //Data lists
+    public static List<LoanExtensionModel> GetExtensionDataSet1 = new List<LoanExtensionModel>();
+    bool ShowPopup = false;
+
+    public int liveLoanParentID;
+    public DateTime displayDate = DateTime.Now;
+    public string sDisplayDate = "";
+    string sHELoan;
+    int rCount = 0;
+
+    private bool deletionSuccess;
+    private bool deletionError;
+    private string? alertMessage;
+
+    int iTrancheIndex = 0;
+    int iTrancheInterest = 0;
+    int iTrancheCapital = 0;
+
+    public int AdditionalLoanID = 0;
+    public string AdditionalTrancheAmount;
+    public  string AdditionalTrancheName = "Prospective Tranche ";
+    public DateTime? NullableAdditionalTrancheDate = DateTime.Now;
+    public DateTime AdditionalTrancheDate = DateTime.Now;
+
+
+    bool showModal = false;
+
+
+    List<TrancheInformation> TrancheInformationList = new List<TrancheInformation>();
+
+
+    int iTrancheInformationCount = 0;
+    int iLoanTotal = 0;
+    int iLoanInterest = 0;
+    int iInterestCalcAmount = 0;
+    int iRepaymentTotal = 0;
+    int iNonZeroSLCTotal = 0;
+
+    double dPercentageOfLoan = 0;
+    double dPercentageOfHE = 0;
+    double dPercentageOfJunior = 0;
+    int step = 1;
+
+
+    string sRepayJunior;
+
+    DateTime dMaturityDate;
+
+    //yoinked code
+
+    //table
+
+    private bool _hidePosition;
+    private bool _loading;
+
+    //tree
+
+    private HashSet<TreeItemData> TreeItems { get; set; } = new HashSet<TreeItemData>();
+
+    //This selected value is the value of the selected loan parent from the loan parents list
+    public string SelectedValue { get; set; }
+
+    //This is the value of the date picked from the date picker
+    DateTime? dateSelected = DateTime.Today;
+
+    public class TreeItemData
+    {
+        public string Text { get; set; }
+
+        public string Icon { get; set; }
+
+        public bool IsExpanded { get; set; } = true;
+
+        public bool HasChild => TreeItems != null && TreeItems.Count > 0;
+
+        public HashSet<TreeItemData> TreeItems { get; set; } = new HashSet<TreeItemData>();
+
+        public TreeItemData(string text, string icon)
+        {
+            Text = text;
+            Icon = icon;
+        }
+    }
+
+    async Task OpenDialog()
+    {
+        var parameters = new DialogParameters {  ["AdditionalTrancheAmount"]=AdditionalTrancheAmount };
+
+        var options = new DialogOptions { CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<Dialog>("Add Tranche", parameters);
+        var result = await dialog.Result;
+
+        if (!result.Cancelled)
+        {
+            NewTrancheData newTrancheData = (NewTrancheData)result.Data;
+            AdditionalTrancheAmount = newTrancheData.AdditionalTrancheAmount;
+            NullableAdditionalTrancheDate = newTrancheData.TrancheDate;
+            AdditionalTrancheDate = NullableAdditionalTrancheDate ?? DateTime.Now;
+        }
+    }
+
+
+    //Called when the app is instantiated
+    //https://docs.microsoft.com/en-us/aspnet/core/blazor/components/lifecycle?view=aspnetcore-6.0
+    //In this example our page returns a list of system users. We call GetSystemUsers as soon as possible in the lifecycle to keep the user waiting less
+    protected override async Task OnInitializedAsync()
+    {
+        if (systemUsers.Count == 0)
+        {
+            try
+            {
+                systemUsers = await _db.GetSystemUsers();
+                liveLoanParents = await _dbGetLoans.GetLiveLoanParents();
+                sDisplayDate = displayDate.ToString("yyyy-MM-dd");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error fetching GetSystemUsers. Exception: {ex}");
+            }
+        }
+    }
+
+    void ModalOk()
+    {
+        Console.WriteLine("Modal ok");
+        showModal = false;
+    }
+
+
+
+    void ModalCancel() => showModal = false;
+
+
+    ////////////////////////////////////////////////////////////////////////////
+    private async Task AddTrancheInformation_Click()
+    {
+        await OpenDialog();
+
+        int iAdditionalTrancheAmount = CurrencyStringPoundsToPence(AdditionalTrancheAmount) ;
+
+        AdditionalLoanID = AdditionalLoanID  + 1;
+        int NewLoanID = AdditionalLoanID + 9000;
+
+        //AdditionalLoanid ;
+        //AdditionalTrancheName ;
+        //AdditionalTrancheDate;
+        LoanModel ProvisionalLoanData = new LoanModel
+            {
+                LoanID = NewLoanID,
+                Business_Name = AdditionalTrancheName + AdditionalLoanID ,
+                DD_Date = AdditionalTrancheDate,
+                MaxLoanAmount = iAdditionalTrancheAmount
+
+            };
+
+        ProvisionalLoanDataList.Add(ProvisionalLoanData);
+        if (liveLoanParentID > 0)
+        {
+            await GetTrancheInformation(liveLoanParentID);          
+        }
+
+
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    private async Task ClearTrancheInformation_Click()
+    {
+        ProvisionalLoanDataList.Clear();
+        AdditionalLoanID = 0;
+        if (liveLoanParentID > 0)
+        {
+             await GetTrancheInformation(liveLoanParentID);          
+        }
+    }
+
+     
+    ///    /////////////////////////////////////////////////////////////////////////
+    private async Task GetLiveLoanParent_Click(int LoanParentID)
+    /******************************************************************************************
+     * This section establishes the loan parent and gets all the loan extension datasets
+     * It then calls GetTrancheInformation to process all Tranches within that Loan Parent  
+     ******************************************************************************************/
+    {
+        try
+        {
+            liveLoanParent = await _dbGetLoans.GetLiveLoanParent(LoanParentID);
+            liveLoanParentID = LoanParentID;
+
+
+            foreach (var liveLoanParent in liveLoanParent)
+            {
+                if (liveLoanParent.HEParent == null)
+                {
+                    liveLoanParent.HEParent = 0;
+                }
+
+                if (Convert.ToInt32(liveLoanParent.HEParent) > 0)
+                {
+                    sHELoan = "YES";
+                }
+                else
+                {
+                    sHELoan = "NO";
+                }
+
+                GetExtensionDataSet1 = await _dbGetLoans.GetExtensionDataSet(Convert.ToInt32(liveLoanParent.LoanID), Convert.ToDateTime(liveLoanParent.DD_Date));
+                await GetTrancheInformation(LoanParentID);
+
+
+
+            }
+        }
+        catch (Exception ex)
+        {
+
+        }
+    }
+
+
+
+
+    private async Task GetTrancheInformation(int LoanParentID)
+    /******************************************************************************************
+     * This section identifies the loan tranches related to the loan parent 
+     * It then calls GetLoanInformation to process all Tranches within that Loan Parent  
+     ******************************************************************************************/
+    {
+
+        try
+        {
+            rCount = 0;
+            liveLoanParentRelatedLoanData = await _dbGetLoans.GetRelatedLoans(LoanParentID);
+            await _dbGetLoans.AlterLHPosBalances(dateSelected?.ToString("yyyy-MM-dd"));                        //this sets the view of LHPosBalances to include the Maturity Date
+            await _dbGetLoans.AlterLoanCoPosBalances(dateSelected?.ToString("yyyy-MM-dd"));                 //this sets the view of LoanCoBalances to include the Maturity Date
+                                                                                                            //   GetAllLenders = await _dbGetLoans.GetAllLenders(LoanParentID);
+            GetTrancheSum = await _dbGetLoans.GetTrancheSum(LoanParentID);                                        //gets the sum of all loan holdings on each tranche
+            /*            GetAllHELoans = await _dbGetLoans.GetHELoans(LoanParentID);   */                                             //gets the Loan balances for HE loans as these are held and repaid differently to Borrower Loans
+
+
+            int iNonZeroSLCTotal = 0;
+
+            //sRepayJunior = "YES";
+
+
+            GetLoanInformation(LoanParentID);
+
+
+        }
+        catch (Exception ex)
+        {
+
+        }
+    }
+    /////////////////////////////////////////////////////////////////////////
+    public static int fnDBIntField(object sField)
+    {
+        int fnDBIntFieldRet = default;
+        try
+        {
+            if (sField is DBNull)
+            {
+                fnDBIntFieldRet = 0;
+            }
+            else
+            {
+                fnDBIntFieldRet = Convert.ToInt32(sField);
+            }
+        }
+        catch (Exception ex)
+        {
+            fnDBIntFieldRet = 0;
+        }
+
+        return fnDBIntFieldRet;
+    }
+
+    /////////////////////////////////////////////////////////////////////////
+    private void GetLoanInformation(int LoanParentID)
+    /******************************************************************************************
+     * This section identifies the loan tranches related to the loan parent 
+     * It then calls GetLoanInformation to process all Tranches within that Loan Parent  
+     ******************************************************************************************/
+    {
+        TrancheInformationList.Clear();
+
+        int iTrancheRepaymentInterest = 0;
+        iTrancheInterest = 0;
+        iTrancheCapital = 0;
+        int iRepaymentResidualInterest = 0;
+
+        // these need to be used correctly
+        DateTime  dDDDate, dDateTo;
+        int iBorrowerRate, iLoantype, iCalcInterest, iTotalNumUnits, iFixedRate, Loantype;
+        iBorrowerRate = 0;
+        Loantype = 0;
+
+
+
+
+
+
+        foreach (var item in liveLoanParentRelatedLoanData)
+        {
+            int trancheamount = item.MaxLoanAmount;
+            string tranchename = item.Business_Name;
+            int trancheid = item.LoanID;
+            DateTime tranchedddate = item.DD_Date;
+            Loantype = item.LoanType;
+            dMaturityDate = item.MaturityDate;
+            iBorrowerRate = item.BorrowerRate;
+
+            foreach (var itemm in GetTrancheSum)
+            {
+                if (item.LoanID == itemm.LoanID)
+                {
+                    iLoanTotal = Convert.ToInt32(itemm.Totalnumunits);
+                    iLoanInterest = 0;
+                    iInterestCalcAmount = GetAccruedInterestCoreHE2(iLoanTotal, tranchedddate, dMaturityDate, iBorrowerRate, trancheid, Loantype, 1);
+
+                    iLoanInterest += iInterestCalcAmount;
+                    iRepaymentTotal = iLoanTotal;
+
+                    iTrancheCapital = iTrancheCapital + iLoanTotal;
+
+                    iTrancheInterest = iTrancheInterest + iInterestCalcAmount;
+
+
+
+                    TrancheInformation tranceinformation = new TrancheInformation
+                    {
+                        trancheid =  item.LoanID.ToString(),
+                        tranchename = item.Business_Name,
+                        tranchedddate = item.DD_Date.ToShortDateString(),
+                        trancheamount = PenceToCurrencyStringPounds(item.MaxLoanAmount),
+                        tranchelhamount = PenceToCurrencyStringPounds(itemm.Totalnumunits),
+                        trancheaccountinterest = PenceToCurrencyStringPounds(iLoanInterest)
+
+                    };
+                    TrancheInformationList.Add(tranceinformation);
+
+                    iTrancheIndex = iTrancheInformationCount;
+                    iTrancheInformationCount += 1;
+
+                }
+            }
+
+
+        }
+
+        // now do the same for the new tranches
+        foreach (var item in ProvisionalLoanDataList)
+        {
+            int trancheamount = item.MaxLoanAmount;
+            string tranchename = item.Business_Name;
+            int trancheid = item.LoanID;
+            DateTime tranchedddate = item.DD_Date;
+
+            iInterestCalcAmount = GetAccruedInterestCoreHE2(trancheamount, tranchedddate, dMaturityDate, iBorrowerRate, trancheid, Loantype, 1);
+
+            iLoanInterest += iInterestCalcAmount;
+            iRepaymentTotal = iLoanTotal;
+
+            iTrancheCapital = iTrancheCapital + trancheamount;
+
+            iTrancheInterest = iTrancheInterest + iInterestCalcAmount;
+
+
+
+            TrancheInformation tranceinformation = new TrancheInformation
+            {
+                trancheid =  item.LoanID.ToString(),
+                tranchename = item.Business_Name,
+                tranchedddate = item.DD_Date.ToShortDateString(),
+                trancheamount = PenceToCurrencyStringPounds(trancheamount),
+                tranchelhamount = PenceToCurrencyStringPounds(trancheamount),
+                trancheaccountinterest = PenceToCurrencyStringPounds(iInterestCalcAmount)
+
+            };
+            TrancheInformationList.Add(tranceinformation);
+
+            iTrancheIndex = iTrancheInformationCount;
+            iTrancheInformationCount += 1;
+
+
+
+
+        }
+    }
+
+
+    /////////////////////////////////////////////////////////////////////////
+    public static int GetAccruedInterestCoreHE2(int iCapital, DateTime dStartDate1, DateTime? dEndDate1, int iRate, int iLoanID, int iLoanType, int iExtensionDataset)
+    /******************************************************************************************
+    * This section iworks out the accruing interest from the start of the loan for the amount submitted
+    * taking into account changes in interest rate and compounding pounts 
+    ******************************************************************************************/
+    {
+        int GetAccruedInterestCoreHE2Ret = default;
+
+
+        int iNumDays;
+        int iFirstDayCounter, iLastDayCounter, iDaysInPeriod, iTotal;
+        double iAmt, rCapital, rRate;
+        DateTime TempDateFirst, TempDateLast, tempDate;
+        long iAmount, iTest, iTest2 = default, iChangeMe;
+        DateTime dCurrentDate, dStartStart, dCapDate, dRateEndDate;
+        double fCurRate;
+        double fRate, fBorrowerRate;
+        long iOutstanding;
+
+        int iFixedRate;
+        int iSplitPerc;
+
+        decimal iJuniorPerc;
+        decimal iSeniorPerc;
+
+        int iJuniorAmount;
+        int iSeniorAmount;
+
+        bool iCapitalised;
+
+        iOutstanding = iCapital;
+
+        DateTime dStartDate = new DateTime(dStartDate1.Year, dStartDate1.Month, dStartDate1.Day, 0, 0, 1);
+        DateTime dEndDate = new DateTime(dEndDate1.Value.Year, dEndDate1.Value.Month, dEndDate1.Value.Day, 0, 0, 1);
+        DateTime dFinalDate = new DateTime(dEndDate1.Value.Year, dEndDate1.Value.Month, dEndDate1.Value.Day, 0, 0, 1);
+
+        iTest = 0;
+
+        rCapital = iCapital;
+        rRate = iRate / 10000d;
+
+        iNumDays = (dEndDate - dStartDate).Days;
+
+        // this needs to pick up loan extensions table to get changes in loan rate
+        List<LoanExtensionModel> ExtensionData = new List<LoanExtensionModel>();
+
+
+        ExtensionData = GetExtensionDataSet1;
+
+        // ExtensionData = GetExtensionDataset(iLoanID, dStartDate1)
+        // instead find te right place in the Extensions dataaset
+        DateTime dStatDate = DateTime.Now;
+        int ExtensionCount = 0;
+        foreach (var item in ExtensionData)
+        {
+            if (Convert.ToDateTime(item.DateActive) > dStartDate)
+            {
+                dStatDate = Convert.ToDateTime(item.DateActive);
+                ExtensionCount += 1;
+                break;
+            }
+        }
+
+        int iStartIndex = 0;
+
+        var ddLoanStartDate = new DateTime(dStartDate1.Year, dStartDate1.Month, dStartDate1.Day, 0, 0, 1);
+        var dAccruedLastDate = new DateTime(dEndDate1.Value.Year, dEndDate1.Value.Month, dEndDate1.Value.Day, 0, 0, 1);
+        // ddLoanStartDate = buyerStartDate
+
+
+        TempDateLast = dStartDate.AddYears(1);
+        iFirstDayCounter = 1;
+        iLastDayCounter = (TempDateLast - dStartDate).Days;
+
+        // rCapital = iOutstanding
+        // rRate = fCurRate / 10000
+
+        iNumDays = (dEndDate - dStartDate).Days;
+
+        // ddLoanStartDate = buyerStartDate
+        iChangeMe = 0;
+        dEndDate = dAccruedLastDate;
+        dCurrentDate = ddLoanStartDate;
+        iAmount = 0;
+        // fCurRate = fCurRate / 10000
+
+        // set the capitalisation date for He Loan
+        if (iLoanType == 6)
+        {
+            dCapDate = GetNextHECapitalisationDate(ddLoanStartDate);
+        }
+        else
+        {
+            dCapDate = GetNextMonthlyCapitalisationDate(ddLoanStartDate);
+        }
+
+        int y = 0;
+
+        iCapitalised = false;
+
+        if (ExtensionCount > 0)
+        {
+            foreach (var item in ExtensionData)
+            {
+                if (Convert.ToDateTime(item.DateActive) < dStatDate)
+                {
+                    break;
+                }
+                fRate = Convert.ToDouble(item.OldRate);
+                int iBorrowerRate = fnDBIntField(item.OldBorrowerRate);
+                fBorrowerRate = iBorrowerRate / 10000;
+                if (fBorrowerRate == 0)
+                {
+                    fBorrowerRate = fRate;
+                }
+                dRateEndDate = Convert.ToDateTime(item.DateActive);
+                if (dRateEndDate > dEndDate1)
+                {
+                    dRateEndDate = dEndDate1.Value;
+                }
+                // if the capitalisation fell during this iteration of the rate then both figures need to be calculated
+
+                while (!(dCapDate > dRateEndDate))  // loop through capitalisation dates until the date is greater than rate end date
+                {
+
+                    if (dCapDate < dRateEndDate)
+                    {
+                        dEndDate = dCapDate;
+                    }
+                    else
+                    {
+                        dEndDate = dRateEndDate;
+                    }
+
+
+                    if (dEndDate == dCapDate) // only do this if this is a capitalisation date - capitalise the interest after the calculation
+                    {
+                        iCapitalised = true;
+                    }
+                    else
+                    {
+                        iCapitalised = false;
+                    }
+
+
+                    dEndDate = new DateTime(dEndDate.Year, dEndDate.Month, dEndDate.Day, 0, 0, 1);
+                    //    iNumDays = (ddLoanStartDate - dEndDate).Days; // difference between loan start and new interest rate (184)
+                    iNumDays = (dEndDate - ddLoanStartDate).Days;
+
+                    iAmount = (long)Math.Round(fBorrowerRate * iOutstanding / 365d * iNumDays);
+
+                    // iChangeMe = 1
+                    iTest += iAmount;
+                    iTest2 += iAmount;
+                    ddLoanStartDate = dEndDate;
+                    if (iCapitalised == true)
+                    {
+                        iOutstanding += iTest2; // capitalise the interest
+
+                        iTest2 = 0L;
+                    }
+
+                    var dNextCapDate = dCapDate.AddDays(1d);
+                    if (iLoanType == 6)
+                    {
+                        dCapDate = GetNextHECapitalisationDate(dNextCapDate);
+                    }
+                    else
+                    {
+                        dCapDate = GetNextMonthlyCapitalisationDate(dNextCapDate);
+                    }
+                    // now do the rest of the loan extension period because it all falls outside a capitalisation period
+
+
+                    dEndDate = dRateEndDate;
+
+
+                    dEndDate = new DateTime(dEndDate.Year, dEndDate.Month, dEndDate.Day, 0, 0, 1);
+
+                    //    iNumDays = (ddLoanStartDate - dEndDate).Days; // difference between loan start and new interest rate (184)
+                    iNumDays = (dEndDate - ddLoanStartDate).Days;
+
+                    iAmount = (long)Math.Round(fBorrowerRate * iOutstanding / 365d * iNumDays);
+
+
+                    // iAmount is the interest to be capitalised
+                    // iOutstanding Original Capital amount
+
+                    // iChangeMe = 1
+
+                    iTest += iAmount;
+                    iTest2 += iAmount;
+                    // new code to set loan start date accurately - so next loop through will calculate loan as starting at the right point
+                    ddLoanStartDate = dEndDate;
+                }
+            }
+        }
+        dEndDate = dFinalDate;
+
+        if (dCapDate < dFinalDate)
+        {
+            dEndDate = dCapDate;
+        }
+
+        while (!(dCapDate > dFinalDate))  // loop through capitalisation dates until the date is greater than loan end date
+        {
+
+            if (dCapDate < dFinalDate)
+            {
+                dEndDate = dCapDate;
+            }
+            else
+            {
+                dEndDate = dFinalDate;
+            }
+
+            if (dEndDate == dCapDate) // only do this if this is a capitalisation date - capitalise the interest after the calculation
+            {
+                iCapitalised = true;
+            }
+            else
+            {
+                iCapitalised = false;
+
+            }
+
+
+            dEndDate = new DateTime(dEndDate.Year, dEndDate.Month, dEndDate.Day, 0, 0, 1);
+            iNumDays = (dEndDate - ddLoanStartDate).Days;
+            iAmount = (long)Math.Round(rRate * iOutstanding / 365d * iNumDays);
+
+
+            iTest += iAmount;
+            iTest2 += iAmount;
+            ddLoanStartDate = dEndDate;
+
+            if (iCapitalised == true)
+            {
+                iOutstanding += iTest2; // capitalise the interest
+                iTest2 = 0;
+            }
+
+            var dNextCapDate = dCapDate.AddDays(1d);
+            if (iLoanType == 6)
+            {
+                dCapDate = GetNextHECapitalisationDate(dNextCapDate);
+            }
+            else
+            {
+                dCapDate = GetNextMonthlyCapitalisationDate(dNextCapDate);
+            }
+        }
+        // and finally - the bit between the cap date and the  rate end date -  if applicable.
+        dEndDate = dFinalDate;
+        // iOutstanding += iTest ' capitalise the interest
+        dEndDate = new DateTime(dEndDate.Year, dEndDate.Month, dEndDate.Day, 0, 0, 1);
+        //  iNumDays = (ddLoanStartDate - dEndDate).Days;
+        iNumDays = (dEndDate - ddLoanStartDate).Days;
+        iAmount = (long)Math.Round(rRate * iOutstanding / 365d * iNumDays);
+
+        iTest += iAmount;
+
+        GetAccruedInterestCoreHE2Ret = Convert.ToInt32(iTest);
+        return GetAccruedInterestCoreHE2Ret;
+    }
+    /////////////////////////////////////////////////////////////////////////
+    public static DateTime GetNextHECapitalisationDate(DateTime DateNow)
+    {
+        DateTime GetNextHECapitalisationDateRet = default;
+
+        int YearNow = DateNow.Year;
+        switch (DateNow.Month)
+        {
+            case 1:
+            case 2:
+            case 3:
+                {
+                    GetNextHECapitalisationDateRet = new DateTime(YearNow, 3, 31, 0, 0, 1);
+                    break;
+                }
+            case 4:
+            case 5:
+            case 6:
+                {
+                    GetNextHECapitalisationDateRet = new DateTime(YearNow, 6, 30, 0, 0, 1);
+                    break;
+                }
+            case 7:
+            case 8:
+            case 9:
+                {
+                    GetNextHECapitalisationDateRet = new DateTime(YearNow, 9, 30, 0, 0, 1);
+                    break;
+                }
+            case 10:
+            case 11:
+            case 12:
+                {
+                    GetNextHECapitalisationDateRet = new DateTime(YearNow, 12, 31, 0, 0, 1);
+                    break;
+                }
+        }
+
+        return GetNextHECapitalisationDateRet;
+    }
+    /////////////////////////////////////////////////////////////////////////
+    public static DateTime GetNextMonthlyCapitalisationDate(DateTime DateNow)
+    {
+        DateTime GetNextMonthlyCapitalisationDateRet = default;
+
+        int YearNow = DateNow.Year;
+        int MonthNow = DateNow.Month;
+        int DayNow = DateTime.DaysInMonth(YearNow, MonthNow);
+
+        GetNextMonthlyCapitalisationDateRet = new DateTime(YearNow, MonthNow, DayNow, 0, 0, 1);
+        return GetNextMonthlyCapitalisationDateRet;
+    }
+    /////////////////////////////////////////////////////////////////////////
+    public static string PenceToCurrencyStringPounds(object sField)
+    {
+        double rVal;
+        int iPence;
+        string sStringPounds = "";
+        string exception;
+        if (sField == System.DBNull.Value)
+            rVal = 0;
+        else
+            try
+            {
+                iPence = System.Convert.ToInt32(sField);
+                rVal = iPence ;
+            }
+            catch (Exception ex)
+            {
+                rVal = 0;
+            }
+        // return  String.Format( "0:#.00}", Convert.ToDecimal(rVal) / 100) ;
+        try
+        {
+            sStringPounds = String.Format( "{0:C}", Convert.ToDecimal(rVal) / 100) ;
+        }
+        catch (Exception ex)
+        {
+            exception = Convert.ToString(ex);
+        }
+        return sStringPounds;
+    }
+    /////////////////////////////////////////////////////////////////////////
+    public static int CurrencyStringPoundsToPence(object sField)
+    {
+        double d;
+        int i, rVal;
+        int penceAmount;
+        string s;
+  
+
+        if (sField == System.DBNull.Value)
+            rVal = 0;
+        else
+            try
+            {
+                s =Convert.ToString(sField);
+                char[] c = { '£' };
+                s = s.Trim(c);
+                //s = s.Remove(i - 1, 1);
+                //i = Strings.InStr(s, "£");
+
+                //if (i > 0)
+                //{
+                //    s = s.Remove(i - 1, 1);
+
+                //    s = s.Trim();
+                //}
+
+                if (double.TryParse(s, out d))
+                    rVal = System.Convert.ToInt32(d * 100);
+                else
+                    rVal = 0;
+            }
+            catch (Exception ex)
+            {
+                rVal = 0;
+            }
+        penceAmount = rVal;
+        return penceAmount;
+}
+
+    /////////////////////////////////////////////////////////////////////////
+    public static string GetRateOfInterestAsString(object sField)
+    {
+        double rVal;
+        int iPence;
+        string sStringPounds = "";
+        string exception;
+        if (sField == System.DBNull.Value)
+            rVal = 0;
+        else
+            try
+            {
+                iPence = System.Convert.ToInt32(sField);
+                rVal = iPence ;
+            }
+            catch (Exception ex)
+            {
+                rVal = 0;
+            }
+        // return  String.Format( "0:#.00}", Convert.ToDecimal(rVal) / 100) ;
+        try
+        {
+            sStringPounds = (String.Format( "{0:0.00}", Convert.ToDecimal(rVal) / 100)) + "%" ;
+        }
+        catch (Exception ex)
+        {
+            exception = Convert.ToString(ex);
+        }
+      return sStringPounds;
+    }
+
+
+
+
+    private async Task Delete_Click(SystemUserModel systemUser)
+    {
+        int rowsAffected;
+
+        try
+        {
+            rowsAffected = await _db.DeleteSystemUser(systemUser);
+            //We have an interesting dilemma here. We have deleted our system user but we need to reflect this on the page
+            //Two choices are available, call get GetSystemUsers again resulting in a second trip to the database or remove the system user from our list systemUsers.
+            //I choose to call GetSystemUsers again which will not result in concurrency
+            systemUsers = await _db.GetSystemUsers();
+
+            if (rowsAffected > 0)
+            {
+                deletionSuccess = true;
+                alertMessage = $"Returned {rowsAffected} rows affected. User has been successfully deleted.";
+            }
+            else
+            {
+                deletionSuccess = false;
+                alertMessage = $"Returned {rowsAffected} rows affected. Something went wrong.";
+            }
+        }
+
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error fetching GetSystemUsers. Exception: {ex}");
+        }
+
+    }
+    /////////////////////////////////////////////////////////////////////////
+    private async Task Update_Click(SystemUserModel systemUser)
+    {
+        //We know that when updating a user we need to pass in the systemUserID of the system user we want to update
+        //We could just pass in the system user id as a parameter to our UpdateUser component and use that to perform our update
+        //However, we might want to see what the details are of our current system user so we will store our object in session
+        //READING: https://docs.microsoft.com/en-gb/aspnet/core/blazor/state-management?view=aspnetcore-5.0&pivots=server
+        //https://stackoverflow.com/a/65693852/4222861
+        await Storage.SetAsync("systemUser", systemUser);
+        //Navigate to another component
+        //NOTE: Anything not stored in session or passed into the component as a parameter, e.g. data or state will be LOST
+        UriHelper.NavigateTo("/UpdateUser");
+    }
+
+    private async Task Edit_Click()
+    {
+
+    }
+
+}
+
+
